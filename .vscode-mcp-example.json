@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy this to <your-repo>/.vscode/mcp.json to register the server with Copilot Chat.",
+  "servers": {
+    "repo-index": {
+      "command": "node",
+      "args": ["${workspaceFolder}/tools/repo-index-mcp/src/mcpServer.js"],
+      "env": {
+        "EMBEDDING_ENDPOINT": "${input:embeddingEndpoint}"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "embeddingEndpoint",
+      "type": "promptString",
+      "description": "Embedding API endpoint (e.g. your Azure OpenAI embeddings deployment URL)"
+    }
+  ]
+}

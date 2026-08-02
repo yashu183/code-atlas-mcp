@@ -1,0 +1,16 @@
+{
+  "name": "repo-index-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local MCP server exposing a repo's code graph + vector index to Copilot Chat in VS Code.",
+  "scripts": {
+    "index": "node src/indexer.js",
+    "start": "node src/mcpServer.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.3.0",
+    "js-yaml": "^4.1.0",
+    "neo4j-driver": "^6.2.0"
+  }
+}
