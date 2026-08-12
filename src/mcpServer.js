@@ -62,6 +62,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   if (name === "search_code") {
+    // Check if embeddings are available (graph-only mode check)
+    const chunkCount = db.prepare(`SELECT COUNT(*) as count FROM chunks`).get();
+    if (chunkCount.count === 0) {
+      return {
+        content: [{
+          type: "text",
+          text: "⚠️  search_code is unavailable: Index was built in GRAPH-ONLY mode (no embeddings).\n\n" +
+                "To enable semantic search:\n" +
+                "1. Re-run the indexer WITHOUT GRAPH_ONLY=true\n" +
+                "2. Set EMBEDDING_ENDPOINT and EMBEDDING_MODEL environment variables\n" +
+                "3. Indexing will take ~2-2.5 hours for embeddings\n\n" +
+                "Graph-based tools (get_call_graph, get_related_files) are still available."
+        }]
+      };
+    }
     const results = await searchCode(db, args.query, args.topK ?? 8);
     return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
   }

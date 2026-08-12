@@ -53,7 +53,40 @@ A local, incrementally-updated codebase index combining **graph database** (depe
 
 ## Quick Start
 
+### Choose Your Mode
+
+**CodeGraph MCP** supports two indexing modes:
+
+| Mode | Speed | Tools Available | Use Case |
+|------|-------|----------------|----------|
+| **Graph-Only** | ~3 minutes | `get_call_graph`, `get_related_files`, Neo4j export | Fast dependency analysis, no embedding setup needed |
+| **Full (Graph + Embeddings)** | ~2-2.5 hours | `search_code`, `get_call_graph`, `get_related_files`, Neo4j export | Semantic code search + dependency analysis |
+
+Set `GRAPH_ONLY=true` to skip embeddings and get instant graph-based tools.
+
+### When to Use Each Mode
+
+**Use Graph-Only If:**
+- You want **fast setup** and immediate results
+- You primarily need **dependency analysis** and blast radius
+- You're using VS Code Copilot's `#codebase` for semantic search already
+- You want to **visualize** the codebase in Neo4j
+- You're **exploring** a new codebase and want quick insights
+
+**Use Full Mode If:**
+- You need **natural language code search** ("find retry logic")
+- You want **concept-based discovery** ("show me error handling patterns")
+- You have time for the initial 2.5-hour indexing
+- You want the most comprehensive code intelligence
+
 ### Prerequisites
+
+#### Graph-Only Mode
+- **Node.js** 18+
+- **Optional**: Docker or Neo4j Desktop (for graph visualization)
+- **Optional**: Beekeeper Studio (for SQLite database browser)
+
+#### Full Mode (Graph + Embeddings)
 - **Node.js** 18+
 - **Ollama** (for local embeddings) OR Azure OpenAI
 - **Optional**: Docker (for Neo4j graph visualization)
@@ -88,7 +121,24 @@ export EMBEDDING_MODEL="text-embedding-ada-002"  # or text-embedding-3-small
 
 ### 3. Index Your Repository
 
-#### Full Index (Graph + Embeddings)
+#### Option A: Graph-Only Mode (Fast - 3 minutes)
+Perfect for immediate dependency analysis and Neo4j visualization:
+
+```bash
+cd /path/to/your/repo
+GRAPH_ONLY=true node /path/to/codegraph-mcp/src/indexer.js
+```
+
+**Performance**:
+- Graph extraction: ~3 minutes (9,611 nodes, 46,693 edges for a ~500-file repo)
+- Database size: ~10-20 MB
+- No embedding setup required
+
+**Available Tools**: `get_call_graph`, `get_related_files`, Neo4j export
+
+#### Option B: Full Index (Graph + Embeddings - 2.5 hours)
+For semantic search capabilities:
+
 ```bash
 cd /path/to/your/repo
 EMBEDDING_ENDPOINT="http://localhost:11434/api/embeddings" \
@@ -101,12 +151,10 @@ node /path/to/codegraph-mcp/src/indexer.js
 - Embeddings: ~2-2.5 hours with parallel processing (10 concurrent requests)
 - Database size: ~100-110 MB
 
-#### Graph-Only Index (Fast, No Embeddings)
-For immediate graph visualization without waiting for embeddings:
+**Available Tools**: `search_code`, `get_call_graph`, `get_related_files`, Neo4j export
 
-1. Comment out embedding code in `src/indexer.js` (lines 159-199)
-2. Run indexer (completes in ~3 minutes)
-3. Later, uncomment and re-run to add embeddings
+#### Upgrading from Graph-Only to Full
+Simply re-run the indexer without `GRAPH_ONLY=true` and with embedding configuration. Existing graph data will be preserved, and only embeddings will be added.
 
 ### 4. Configure VS Code Copilot
 
@@ -117,7 +165,21 @@ mkdir -p .vscode
 cp /path/to/codegraph-mcp/.vscode-mcp-example.json .vscode/mcp.json
 ```
 
-Edit `.vscode/mcp.json` and update the path:
+Edit `.vscode/mcp.json` based on your mode:
+
+#### Graph-Only Mode
+```json
+{
+  "servers": {
+    "repo-index": {
+      "command": "node",
+      "args": ["/absolute/path/to/codegraph-mcp/src/mcpServer.js"]
+    }
+  }
+}
+```
+
+#### Full Mode (Graph + Embeddings)
 ```json
 {
   "servers": {
@@ -142,8 +204,22 @@ Cmd+Shift+P → "Developer: Reload Window"
 
 ### MCP Tools Available to Copilot
 
-#### 1. `search_code` - Semantic Search
+#### 1. `search_code` - Semantic Search *(Full Mode Only)*
 Find code by natural language, not just keywords.
+
+**Availability**: Only works when indexed with embeddings (without `GRAPH_ONLY=true`)
+
+If you try to use `search_code` in graph-only mode, you'll get:
+```
+⚠️  search_code is unavailable: Index was built in GRAPH-ONLY mode (no embeddings).
+
+To enable semantic search:
+1. Re-run the indexer WITHOUT GRAPH_ONLY=true
+2. Set EMBEDDING_ENDPOINT and EMBEDDING_MODEL environment variables
+3. Indexing will take ~2-2.5 hours for embeddings
+
+Graph-based tools (get_call_graph, get_related_files) are still available.
+```
 
 **Example queries**:
 ```
@@ -186,6 +262,30 @@ Show me error handling across the codebase
 ```
 Use get_call_graph to analyze the blast radius of AuthHelper with depth 3
 Use search_code to find margin calculation patterns
+```
+
+### Example Workflow: Graph-Only → Full Mode
+
+Many users start with graph-only mode for quick exploration, then add semantic search later:
+
+```bash
+# Day 1: Quick exploration with graph-only
+cd ~/projects/new-codebase
+GRAPH_ONLY=true node ~/tools/codegraph-mcp/src/indexer.js
+
+# Use graph tools in VS Code Copilot
+# "Use get_call_graph to show what depends on AuthHelper"
+
+# Export to Neo4j for visual exploration
+NEO4J_PASSWORD="password" node ~/tools/codegraph-mcp/export-to-neo4j.js .
+
+# Day 2: Add semantic search after initial exploration
+EMBEDDING_ENDPOINT="http://localhost:11434/api/embeddings" \
+EMBEDDING_MODEL="qwen3-embedding" \
+node ~/tools/codegraph-mcp/src/indexer.js
+
+# Now use semantic search
+# "Use search_code to find JWT validation logic"
 ```
 
 ## Graph Visualization with Neo4j
@@ -303,6 +403,14 @@ FROM chunks;
 Set up automated indexing to keep your index fresh:
 
 ### Manual Refresh
+
+**Graph-Only Mode**:
+```bash
+cd /path/to/your/repo
+GRAPH_ONLY=true /path/to/codegraph-mcp/nightly-refresh.sh
+```
+
+**Full Mode**:
 ```bash
 cd /path/to/your/repo
 /path/to/codegraph-mcp/nightly-refresh.sh

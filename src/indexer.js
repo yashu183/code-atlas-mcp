@@ -21,6 +21,7 @@ import { extractAngularSymbols, extractRelativeImports } from "./extractors/angu
 import { extractYamlNodes } from "./extractors/yaml.js";
 
 const REPO_ROOT = process.cwd();
+const GRAPH_ONLY = process.env.GRAPH_ONLY === "true";
 const EXT_LANG = {
   ".cs": "csharp",
   ".ts": "angular",
@@ -156,45 +157,47 @@ async function indexFile(db, repo, filePath) {
     }
   }
 
-  // chunks + embeddings - PARALLEL BATCH PROCESSING
-  const PARALLEL_BATCH_SIZE = 10; // Process 10 embeddings concurrently
+  // chunks + embeddings - PARALLEL BATCH PROCESSING (skip if GRAPH_ONLY=true)
+  if (!GRAPH_ONLY) {
+    const PARALLEL_BATCH_SIZE = 10; // Process 10 embeddings concurrently
 
-  const chunkTargets =
-    lang === "yaml"
-      ? [{ nodeId: fileNode.lastInsertRowid, start: 1, end: text.split("\n").length, text }]
-      : symbols.length
-      ? symbols
-          .filter((s) => s.kind === "method" || s.kind === "function")
-          .map((sym) => ({
-            nodeId: nameToId[sym.name],
-            start: sym.startLine,
-            end: sym.endLine,
-            text: text.split("\n").slice(sym.startLine - 1, sym.endLine).join("\n"),
-          }))
-      : [{ nodeId: fileNode.lastInsertRowid, start: 1, end: text.split("\n").length, text }];
+    const chunkTargets =
+      lang === "yaml"
+        ? [{ nodeId: fileNode.lastInsertRowid, start: 1, end: text.split("\n").length, text }]
+        : symbols.length
+        ? symbols
+            .filter((s) => s.kind === "method" || s.kind === "function")
+            .map((sym) => ({
+              nodeId: nameToId[sym.name],
+              start: sym.startLine,
+              end: sym.endLine,
+              text: text.split("\n").slice(sym.startLine - 1, sym.endLine).join("\n"),
+            }))
+        : [{ nodeId: fileNode.lastInsertRowid, start: 1, end: text.split("\n").length, text }];
 
-  // Filter out chunks that already exist
-  const chunksToEmbed = [];
-  for (const chunk of chunkTargets) {
-    const hash = sha256(chunk.text);
-    const existing = db.prepare(`SELECT id FROM chunks WHERE node_id = ? AND content_hash = ?`).get(chunk.nodeId, hash);
-    if (!existing) {
-      chunksToEmbed.push({ ...chunk, hash });
+    // Filter out chunks that already exist
+    const chunksToEmbed = [];
+    for (const chunk of chunkTargets) {
+      const hash = sha256(chunk.text);
+      const existing = db.prepare(`SELECT id FROM chunks WHERE node_id = ? AND content_hash = ?`).get(chunk.nodeId, hash);
+      if (!existing) {
+        chunksToEmbed.push({ ...chunk, hash });
+      }
     }
-  }
 
-  // Process chunks in parallel batches
-  for (let i = 0; i < chunksToEmbed.length; i += PARALLEL_BATCH_SIZE) {
-    const batch = chunksToEmbed.slice(i, i + PARALLEL_BATCH_SIZE);
-    const embeddings = await Promise.all(batch.map(chunk => embed(chunk.text)));
+    // Process chunks in parallel batches
+    for (let i = 0; i < chunksToEmbed.length; i += PARALLEL_BATCH_SIZE) {
+      const batch = chunksToEmbed.slice(i, i + PARALLEL_BATCH_SIZE);
+      const embeddings = await Promise.all(batch.map(chunk => embed(chunk.text)));
 
-    for (let j = 0; j < batch.length; j++) {
-      const chunk = batch[j];
-      const vector = embeddings[j];
-      db.prepare(
-        `INSERT INTO chunks (node_id, path, start_line, end_line, content_hash, text, embedding)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(chunk.nodeId, filePath, chunk.start, chunk.end, chunk.hash, chunk.text, toBuffer(vector));
+      for (let j = 0; j < batch.length; j++) {
+        const chunk = batch[j];
+        const vector = embeddings[j];
+        db.prepare(
+          `INSERT INTO chunks (node_id, path, start_line, end_line, content_hash, text, embedding)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(chunk.nodeId, filePath, chunk.start, chunk.end, chunk.hash, chunk.text, toBuffer(vector));
+      }
     }
   }
 }
@@ -242,6 +245,11 @@ async function main() {
   const repo = path.basename(REPO_ROOT);
   const db = openDb();
   db.exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
+
+  console.log(`\nIndex Mode: ${GRAPH_ONLY ? "GRAPH-ONLY (fast, no embeddings)" : "FULL (graph + embeddings)"}`);
+  if (GRAPH_ONLY) {
+    console.log("Embeddings disabled. search_code tool will not work, but graph tools will.\n");
+  }
 
   const lastCommit = db.prepare(`SELECT value FROM meta WHERE key = 'last_indexed_commit'`).pluck().get();
   const headSha = execSync("git rev-parse HEAD", { cwd: REPO_ROOT }).toString().trim();
