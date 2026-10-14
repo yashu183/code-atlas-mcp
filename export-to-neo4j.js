@@ -18,7 +18,7 @@ async function exportToNeo4j() {
   const dbPath = path.join(repoPath, '.repo-index', 'index.db');
 
   if (!fs.existsSync(dbPath)) {
-    console.error(`❌ Database not found at: ${dbPath}`);
+    console.error(`Database not found at: ${dbPath}`);
     console.error('Please provide the repo path as an argument:');
     console.error('  node export-to-neo4j.js /path/to/repo');
     process.exit(1);
@@ -78,7 +78,7 @@ async function exportToNeo4j() {
         console.log(`  ${nodeCount} nodes exported...`);
       }
     }
-    console.log(`✓ ${nodeCount} nodes exported`);
+    console.log(` ${nodeCount} nodes exported`);
 
     // Export edges
     console.log('Exporting edges...');
@@ -107,11 +107,11 @@ async function exportToNeo4j() {
     }
     console.log(`✓ ${edgeCount} edges exported`);
 
-    console.log('\n✅ Export complete!');
-    console.log(`\n📊 Database: ${NEO4J_DATABASE}`);
-    console.log(`🌐 Open Neo4j Browser at http://localhost:7474`);
+    console.log('\n Export complete!');
+    console.log(`\n Database: ${NEO4J_DATABASE}`);
+    console.log(` Open Neo4j Browser at http://localhost:7474`);
     console.log(`   (Make sure to select database "${NEO4J_DATABASE}" in the browser)`);
-    console.log('\n💡 Try these queries:');
+    console.log('\n Try these queries:');
     console.log('  - View all classes: MATCH (n:Class) RETURN n LIMIT 50');
     console.log('  - Find call chains: MATCH path=(a:Method)-[:CALLS*1..3]->(b:Method) RETURN path LIMIT 25');
     console.log('  - DI registrations: MATCH (i:Interface)<-[:REGISTERS]-(impl) RETURN i, impl');

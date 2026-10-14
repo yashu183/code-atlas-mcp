@@ -59,8 +59,8 @@ A local, incrementally-updated codebase index combining **graph database** (depe
 
 | Mode | Speed | Tools Available | Use Case |
 |------|-------|----------------|----------|
-| **Graph-Only** | ~3 minutes | `get_call_graph`, `get_related_files`, Neo4j export | Fast dependency analysis, no embedding setup needed |
-| **Full (Graph + Embeddings)** | ~2-2.5 hours | `search_code`, `get_call_graph`, `get_related_files`, Neo4j export | Semantic code search + dependency analysis |
+| **Graph-Only** | ~3 minutes | `get_call_graph`, `get_related_files`, `get_blast_radius_from_changes` (auto-visualizes in Neo4j) | Fast dependency analysis, impact analysis, no embedding setup needed |
+| **Full (Graph + Embeddings)** | ~2-2.5 hours | `search_code`, `get_call_graph`, `get_related_files`, `get_blast_radius_from_changes` (auto-visualizes in Neo4j) | Semantic code search + dependency analysis + impact analysis |
 
 Set `GRAPH_ONLY=true` to skip embeddings and get instant graph-based tools.
 
@@ -134,7 +134,7 @@ GRAPH_ONLY=true node /path/to/codegraph-mcp/src/indexer.js
 - Database size: ~10-20 MB
 - No embedding setup required
 
-**Available Tools**: `get_call_graph`, `get_related_files`, Neo4j export
+**Available Tools**: `get_call_graph`, `get_related_files`, `get_blast_radius_from_changes` (auto-visualizes in Neo4j)
 
 #### Option B: Full Index (Graph + Embeddings - 2.5 hours)
 For semantic search capabilities:
@@ -151,7 +151,7 @@ node /path/to/codegraph-mcp/src/indexer.js
 - Embeddings: ~2-2.5 hours with parallel processing (10 concurrent requests)
 - Database size: ~100-110 MB
 
-**Available Tools**: `search_code`, `get_call_graph`, `get_related_files`, Neo4j export
+**Available Tools**: `search_code`, `get_call_graph`, `get_related_files`, `get_blast_radius_from_changes` (auto-visualizes in Neo4j)
 
 #### Upgrading from Graph-Only to Full
 Simply re-run the indexer without `GRAPH_ONLY=true` and with embedding configuration. Existing graph data will be preserved, and only embeddings will be added.
@@ -229,8 +229,8 @@ Where is error handling implemented?
 Find code that calculates profit margins
 ```
 
-#### 2. `get_call_graph` - Dependency Analysis
-Understand what calls what, and blast radius analysis.
+#### 2. `get_call_graph` - Dependency Analysis (hypothetical / pre-change)
+Understand what calls what, and blast radius analysis — computed from the current indexed codebase, no git changes required. This is the tool for "what would be affected **if** I change X" questions asked *before* you've actually made the edit.
 
 **Example queries**:
 ```
@@ -238,6 +238,7 @@ What's the blast radius for AuthenticationHelper?
 Show me what depends on MarginController
 What does UserService call?
 Find all callers of ValidateToken method
+If I change the authentication, what will be affected?
 ```
 
 #### 3. `get_related_files` - Discover Connected Code
@@ -249,20 +250,97 @@ What files are related to Program.cs?
 Show me files connected to this service
 ```
 
+#### 4. `get_blast_radius_from_changes` - Impact Analysis *(auto-visualized)*
+Analyze the blast radius of code changes that **already exist** (staged, all local uncommitted, or recent commits — read via `git diff`) for commit validation, release planning, and QA acceptance criteria. For a hypothetical "what if I change X" question before any edit exists, use `get_call_graph` instead.
+
+Every call **automatically exports the result to Neo4j** as well — a JSON summary alone isn't much use if you can't actually see it, so there's no separate "export" step to remember. Nodes are color-coded (🔴 changed, 🟠 blast radius, ⚪ unchanged) and a ready-to-import `.repo-index/blast-radius-style.grass` stylesheet is (re)generated on every run. If Neo4j isn't reachable, the export is skipped gracefully — the text/JSON analysis is still returned in full, with a `neo4jExport.error` + troubleshooting hint instead of a graph.
+
+**Availability**: Works in both Graph-Only and Full modes (Neo4j is optional — only needed for the visualization part)
+
+**Example queries**:
+```
+What's the blast radius of my staged changes?
+Show me the impact of all my local changes
+What did the last 3 commits affect?
+Analyze the blast radius of my uncommitted work with depth 5
+Visualize the blast radius of the last 3 commits in Neo4j
+```
+
+**Modes**:
+- `staged`: Analyze only staged changes (before committing)
+- `all`: Analyze all local changes (staged + unstaged)
+- `commits`: Analyze last N commits (max 10, for release planning)
+
+**Use Cases**:
+- **Before committing**: "What will my staged changes affect?"
+- **Release planning**: "What's the impact of the last 5 commits?"
+- **QA acceptance criteria**: "Show me all code affected by recent changes" — share the Neo4j view directly
+- **Quick dev check**: "What's the blast radius of my work?"
+- **Stakeholder demos**: point them at the auto-generated Neo4j graph instead of a JSON blob
+
 ### Best Practices for Copilot Queries
 
-**Good (Uses MCP tools)**:
+**Good (Natural language - Copilot chooses the right tool)**:
 ```
 What's the impact of changing the authorization middleware?
 Find all implementations of IRepository pattern
 Show me error handling across the codebase
+What will my staged changes affect?
 ```
 
-**Better (Explicit tool usage)**:
+**Better (Explicit tool usage for specific analysis)**:
 ```
 Use get_call_graph to analyze the blast radius of AuthHelper with depth 3
 Use search_code to find margin calculation patterns
+Use get_blast_radius_from_changes with mode=staged to show impact of my changes
+Use get_blast_radius_from_changes with mode=commits and commits=5 for release planning
 ```
+
+### Intelligent Blast Radius Queries via MCP
+
+Once MCP is configured, your coding assistant can **intelligently query blast radius** without leaving the editor:
+
+**In VS Code Copilot Chat:**
+```
+You: What's the blast radius of my staged changes?
+Copilot: [Uses get_blast_radius_from_changes with mode=staged]
+         Your staged changes affect:
+         - 3 files changed
+         - 8 nodes modified (5 methods, 3 classes)
+         - 23 dependent nodes in blast radius
+         - Total impact: 31 nodes across 12 files
+
+         Key dependencies affected:
+         - UserController.GetUser (2 hops away)
+         - AuthenticationMiddleware.Invoke (1 hop away)
+         ...
+
+You: What about the last 3 commits?
+Copilot: [Uses get_blast_radius_from_changes with mode=commits, commits=3]
+         Last 3 commits affect:
+         - 7 files changed
+         - 15 nodes modified
+         - 45 dependent nodes
+         - Total nodes exported to Neo4j: 1,234
+
+         🎨 Visualized automatically — style file: .repo-index/blast-radius-style.grass
+         📖 Open http://localhost:7474, import the .grass file once, then run the
+             provided query to see red (changed) / orange (blast radius) nodes.
+         ...
+
+You: If I change the authentication, what will be affected?
+Copilot: [No changes exist yet, so it uses get_call_graph on the auth symbol instead]
+         AuthenticationMiddleware.Invoke is called by:
+         - 12 controllers (1 hop)
+         - 3 background jobs (2 hops)
+         ...
+```
+
+**No need for manual commands!** Just ask naturally, and Copilot will:
+1. Choose the right tool — `get_call_graph` for hypothetical/pre-change questions, `get_blast_radius_from_changes` once real changes exist
+2. Select appropriate parameters (mode, commits, depth)
+3. Parse the results and present them clearly
+4. See the Neo4j graph that `get_blast_radius_from_changes` exports automatically — no separate export step
 
 ### Example Workflow: Graph-Only → Full Mode
 
@@ -288,9 +366,142 @@ node ~/tools/codegraph-mcp/src/indexer.js
 # "Use search_code to find JWT validation logic"
 ```
 
+## Blast Radius Analysis
+
+**Analyze and visualize the impact of your code changes before committing, releasing, or for QA planning.**
+
+Available in **two modes**:
+1. **MCP Tool** (recommended): Query intelligently via your coding assistant
+2. **CLI + Neo4j Visualization**: Export visual graph with highlighted changes
+
+### Mode 1: Intelligent MCP Queries (Recommended)
+
+Once MCP is configured, ask your coding assistant naturally:
+
+```
+You: What's the blast radius of my staged changes?
+You: Show me the impact of the last 3 commits
+You: What will my uncommitted work affect with depth 5?
+```
+
+Your assistant will use the `get_blast_radius_from_changes` tool and present results instantly - **no manual commands needed!**
+
+**Use Cases**:
+1. **Before Committing**: "What will my staged changes affect?"
+2. **Release Planning**: "What's the impact of the last 5 commits?"
+3. **QA Acceptance Criteria**: "Show all code affected by recent changes"
+4. **Quick Dev Check**: "What's the blast radius of my work?"
+
+### Mode 2: CLI + Neo4j Visualization
+
+For visual graph exploration, use the standalone CLI tool that exports to Neo4j with highlighting:
+- **Red nodes**: Your changed files
+- **Orange nodes**: Dependencies (blast radius)
+
+### Usage
+
+```bash
+cd /path/to/your/repo
+
+# Staged changes only (before commit)
+node /path/to/codegraph-mcp/blast-radius.js --staged
+
+# All local changes (staged + unstaged)
+node /path/to/codegraph-mcp/blast-radius.js --all
+
+# Last 3 commits (release planning)
+node /path/to/codegraph-mcp/blast-radius.js --commits 3
+
+# Custom depth for deeper dependency analysis
+node /path/to/codegraph-mcp/blast-radius.js --commits 1 --depth 5
+```
+
+### Output Example
+
+```
+ Blast Radius Analysis
+Mode: staged
+Depth: 3 hops
+
+ Changed files (2):
+  - src/Services/AuthService.cs
+  - src/Controllers/UserController.cs
+
+ Changed nodes (5):
+  - AuthService (class) in src/Services/AuthService.cs:10
+  - ValidateToken (method) in src/Services/AuthService.cs:25
+  - UserController (class) in src/Controllers/UserController.cs:8
+  - GetUser (method) in src/Controllers/UserController.cs:15
+  - UpdateUser (method) in src/Controllers/UserController.cs:45
+
+ Blast radius: 23 dependent nodes
+
+ Exporting to Neo4j...
+✓ Style file saved to: .repo-index/blast-radius-style.grass
+ Export complete!
+```
+
+### Viewing the Graph with Automatic Colors
+
+**Step 1: Import Styling (One-time setup)**
+
+The blast radius tool automatically generates a `.grass` (Graph Stylesheet) file with color rules. Import it once:
+
+1. Open http://localhost:7474
+2. Click the **⚙️ Settings icon** (bottom left)
+3. Select **"Graph Stylesheet"**
+4. **Drag and drop** `.repo-index/blast-radius-style.grass` into the panel
+   - Or copy/paste the file contents manually
+5. Colors apply automatically!
+
+**Step 2: Run Query**
+
+```cypher
+MATCH (n:Node)
+WHERE n.changed = true OR n.blast_radius = true
+OPTIONAL MATCH (n)-[r]-(connected)
+WHERE connected.changed = true OR connected.blast_radius = true
+RETURN n, r, connected
+```
+
+**Colors will automatically display:**
+- 🔴 **Red** = Changed nodes (your modifications)
+- 🟠 **Orange** = Blast radius (affected dependencies)
+- ⚪ **Gray** = Unchanged nodes
+
+**Alternative - View All Nodes:**
+```cypher
+MATCH (n:Node)
+RETURN n
+LIMIT 1000
+```
+The `.grass` file uses the `color` property, so all nodes will be properly colored!
+
+### Which Mode to Use?
+
+**Use MCP Tool (Mode 1) when:**
+- You want quick answers without leaving your editor
+- You're in active development and need fast feedback
+- You want to paste results into docs/PRs/tickets
+- You need structured data for further analysis
+
+**Use CLI + Neo4j (Mode 2) when:**
+- You want visual graph exploration
+- You're presenting to stakeholders (visual is more impactful)
+- You need to share screenshots with QA
+- You want to explore complex dependency chains visually
+
+### Pro Tips
+
+- **Before commit**: Ask Copilot "What's the blast radius of my staged changes?" or use `--staged`
+- **Before push**: Use MCP with `mode=all` or CLI `--all` to see complete local impact
+- **Release planning**: Use `--commits 5` to analyze scope of last sprint
+- **Share with QA**: Export Neo4j visualization to help define acceptance criteria
+- **Performance**: Adjust `--depth` based on codebase size (default: 3 hops)
+
 ## Graph Visualization with Neo4j
 
-Export your SQLite graph to Neo4j for visual exploration:
+Export your complete SQLite graph to Neo4j for visual exploration:
 
 ### Setup Neo4j
 
@@ -446,6 +657,7 @@ codegraph-mcp/
 │       ├── csharp.js          # C# symbol extraction
 │       ├── angular.js         # TypeScript/Angular extraction
 │       └── yaml.js            # YAML pipeline extraction
+├── blast-radius.js            # Blast radius visualization tool
 ├── export-to-neo4j.js         # Neo4j export utility
 ├── nightly-refresh.sh         # Incremental update script
 └── .vscode-mcp-example.json   # MCP config template

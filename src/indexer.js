@@ -2,7 +2,8 @@
 // for the graph, and chunks+embeds for the vector table.
 //
 // Dispatches by extension to a per-language extractor (src/extractors/*):
-//   .cs          -> C# (classes/interfaces/records/structs, methods, DI registrations)
+//   .cs          -> C# (classes/interfaces/records/structs, methods, DI registrations,
+//                  top-level-statement Program.cs, [Authorize]/[AllowAnonymous] attributes)
 //   .ts/.tsx/.js -> Angular/TS (decorated classes, methods, constructor injection, relative imports)
 //   .yml/.yaml   -> pipeline/manifest structural nodes (Azure DevOps, GitHub Actions, k8s, compose)
 //
@@ -144,6 +145,17 @@ async function indexFile(db, repo, filePath) {
     }
   }
 
+  // 'references' edges — e.g. C# [Authorize]/[AllowAnonymous] attributes.
+  // dst_id is intentionally always null (there's no node named "Authorize");
+  // dst_ref carries the marker so "which methods require auth" is a graph
+  // query (`WHERE kind='references' AND dst_ref='Authorize'`) instead of grep.
+  for (const sym of symbols) {
+    const srcId = nameToId[sym.name];
+    for (const ref of sym.references || []) {
+      db.prepare(`INSERT INTO edges (src_id, dst_id, dst_ref, kind) VALUES (?, NULL, ?, 'references')`).run(srcId, ref);
+    }
+  }
+
   // 'imports' edges for Angular relative imports, resolved to a path guess
   // (exact file existence isn't checked here — cheap heuristic, refined
   // in the cross-file pass if needed)
@@ -253,15 +265,33 @@ async function main() {
 
   const lastCommit = db.prepare(`SELECT value FROM meta WHERE key = 'last_indexed_commit'`).pluck().get();
   const headSha = execSync("git rev-parse HEAD", { cwd: REPO_ROOT }).toString().trim();
-  const diff = getChangedFiles(lastCommit);
 
+  // --files=path1,path2,... reprocesses ONLY the listed files (e.g. to pick
+  // up an extractor change for a specific set of files without walking the
+  // whole repo or disturbing the incremental-index watermark). It's a
+  // partial update: last_indexed_commit is intentionally left untouched so
+  // a later plain incremental run still correctly diffs from where it left
+  // off, instead of silently skipping everything else that changed in
+  // between.
+  const filesArg = process.argv.find((a) => a.startsWith("--files="));
   let targets;
-  if (diff === null) {
-    console.log("Full index (no prior commit recorded)...");
-    targets = walkAllSourceFiles().map((filePath) => ({ status: "M", filePath }));
+  if (filesArg) {
+    const files = filesArg
+      .slice("--files=".length)
+      .split(",")
+      .map((f) => f.trim())
+      .filter(Boolean);
+    targets = files.map((filePath) => ({ status: "M", filePath }));
+    console.log(`Targeted reindex: ${files.length} file(s) via --files (last_indexed_commit left unchanged)`);
   } else {
-    console.log(`Incremental index: ${diff.length} changed file(s) since ${lastCommit}`);
-    targets = diff.filter((d) => EXT_LANG[path.extname(d.filePath)]);
+    const diff = getChangedFiles(lastCommit);
+    if (diff === null) {
+      console.log("Full index (no prior commit recorded)...");
+      targets = walkAllSourceFiles().map((filePath) => ({ status: "M", filePath }));
+    } else {
+      console.log(`Incremental index: ${diff.length} changed file(s) since ${lastCommit}`);
+      targets = diff.filter((d) => EXT_LANG[path.extname(d.filePath)]);
+    }
   }
 
   for (const { status, filePath } of targets) {
@@ -277,12 +307,15 @@ async function main() {
   resolveCrossFileEdges(db);
   indexDiRegistrations(db, repo, walkAllSourceFiles());
 
-  db.prepare(
-    `INSERT INTO meta (key, value) VALUES ('last_indexed_commit', ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(headSha);
-
-  console.log(`Done. Index now at commit ${headSha}.`);
+  if (!filesArg) {
+    db.prepare(
+      `INSERT INTO meta (key, value) VALUES ('last_indexed_commit', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run(headSha);
+    console.log(`Done. Index now at commit ${headSha}.`);
+  } else {
+    console.log("Done (targeted reindex — last_indexed_commit unchanged).");
+  }
 }
 
 main().catch((err) => {
